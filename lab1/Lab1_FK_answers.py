@@ -30,9 +30,53 @@ def part1_calculate_T_pose(bvh_file_path):
     Tips:
         joint_name顺序应该和bvh一致
     """
-    joint_name = None
-    joint_parent = None
-    joint_offset = None
+
+    joint_name = []
+    joint_parent = []
+    joint_offset = []
+    stack = []
+    dimension = 3
+    with open(bvh_file_path, 'r') as f:
+        lines = f.readlines()
+        for i in range(len(lines)):
+            if lines[i].startswith('ROOT'):
+                break
+
+        joint_name.append(lines[i].split(" ")[1].strip())
+        joint_parent.append(-1);
+        stack.append(0)
+        i += 2
+
+        while len(stack) != 0:
+
+            line = lines[i].strip()
+            lineList = list(filter(None, line.split(' ')))
+
+            if lineList[0] == "JOINT" or lineList[0] == "End":
+
+                # end joint name should be its parent joint's name + "_end"
+                if lineList[0] == "End":
+                    joint_name.append(joint_name[stack[-1]] + "_end")
+                else:
+                    joint_name.append(lineList[1])
+
+                joint_parent.append(stack[-1])
+                stack.append(len(joint_name) - 1)
+                assert (len(joint_parent) == len(joint_name))
+
+            elif lineList[0] == "OFFSET":
+                pos = []
+                for j in range(1, 1 + dimension):
+                    pos.append(float(lineList[j]))
+                joint_offset.append(pos)
+                assert(len(joint_offset) == len(joint_name))
+
+            elif lineList[0] == "}":
+                stack.pop()
+
+            i += 1
+
+    joint_offset = np.array(joint_offset)
     return joint_name, joint_parent, joint_offset
 
 
