@@ -2,15 +2,15 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 # assume the rotation is using the rotation represented by radian euler form
-def find_JT(rotations, position, target):
+def find_JT(rotations, position):
     rows = np.shape(rotations)[0]
-    JT = np.zeros((rotations.shape()[0] * 3, 3))
+    JT = np.zeros((rows * 3, 3))
 
     parent_orientation = R.identity()
 
     # calculate jacobian matrix using geometry approach
     for i in range(0, rows):
-        r = target - position[i]
+        r = position[-1] - position[i]
         Rx = R.from_euler("X", [rotations[i][0]])
         Ry = R.from_euler("Y", [rotations[i][1]])
         Rz = R.from_euler("Z", [rotations[i][2]])
@@ -23,6 +23,7 @@ def find_JT(rotations, position, target):
         JT[3 * i + 2] = np.cross(az, r)
 
         parent_orientation *= Rx * Ry * Rz
+    return JT
 
 # Do forward kinematic to a chain of joint
 # always assume the previous joint is the current joint's
@@ -35,10 +36,11 @@ def FK(rotations, offsets):
     parent_position = np.array([0, 0, 0])
     for i in range(0, np.shape(rotations)[0]):
         rotation = R.from_euler("XYZ", rotations[i])
-        orientation = parent_orientation * rotation
-        positions = parent_position + parent_orientation.apply(offsets[i])
+        joint_orientation = parent_orientation * rotation
+        orientation[i] = joint_orientation.as_euler('XYZ')
+        positions[i] = parent_position + parent_orientation.apply(offsets[i])
 
-        parent_orientation = orientation
+        parent_orientation = joint_orientation
 
     return positions, orientation
 
@@ -52,6 +54,23 @@ def find_rotations(orientation, meta_data):
     output:
         joint_rotation: the local rotation of every joint
     """
+
+    joint_rotation = []
+    for i in range(0, len(meta_data.joint_name)):
+        name = meta_data.joint_name[i]
+        parent_idx = meta_data.joint_parent[i]
+        joint_orientation = R.from_quat(orientation[i])
+        if name == "RootJoint":
+            rotation = joint_orientation.as_euler('XYZ')
+        elif name.find("_end") != -1:
+            continue
+        else:
+            parent_orientation = R.from_quat(orientation[parent_idx])
+            rotation = (parent_orientation.inv() * joint_orientation).as_euler('XYZ')
+
+        joint_rotation.append(rotation)
+
+    return np.array(joint_rotation)
 
 def get_path_info(joint_orientation, joint_positions, meta_data, path, forward_path, backward_path):
     """
@@ -117,8 +136,13 @@ def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, tar
         joint_orientations: 计算得到的关节朝向，是一个numpy数组，shape为(M, 4)，M为关节数
     """
     path, path_names, forward_path, backward_path = meta_data.get_path_from_root_to_end()
-    forward_path = list(reversed(forward_path))
-    """
+
+    # current rotation for every joint
+    joint_rotation = find_rotations(joint_orientations, meta_data)
+
+    # current location and rotation in the path, rotation is in euler radian form
+    path_rotation, path_offset, path_position = get_path_info(joint_orientations, joint_positions, meta_data, path, forward_path, backward_path)
+
     # initial stepping
     alpha = 1
 
@@ -126,23 +150,18 @@ def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, tar
     tolerance = 0.01
     max_iteration = 20
 
-    # current rotation for every joint
-    joint_rotations = find_rotation(joint_orientations, meta_data)
-
-    # current location and rotation in the path, rotation is in euler radian form
-    path_rotation, path_position, path_offset
-
-
-    iter = 0
-    while iter < max_iteration and np.linalg.norm(path_position[-1] - target_pose) > tolerance:
-        jacobian_transpose = find_JT(path_rotation, path_position, target_pose)
-        old_distance = np.linalg.norm(path_position[-1] - target_pose)
+    iteration = 0
+    while iteration < max_iteration and np.linalg.norm(path_position[-1] - target_pose) > tolerance:
+        iteration += 1
+        jacobian_transpose = find_JT(path_rotation, path_position)
+        distance_vector = path_position[-1] - target_pose
+        old_distance = np.linalg.norm(distance_vector)
 
         is_decreasing = False
 
         while not is_decreasing:
             path_rotation_1D = np.reshape(path_rotation, (-1))
-            path_rotation_1D = path_rotation_1D - alpha * jacobian_transpose * (path_position[-1] - target_pose)
+            path_rotation_1D = path_rotation_1D - alpha * np.matmul(jacobian_transpose, distance_vector)
             path_rotation = np.reshape(path_rotation_1D, (-1, 3))
 
             path_position, path_orientations = FK(path_rotation, path_offset)
@@ -151,8 +170,10 @@ def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, tar
             else:
                 is_decreasing = True
 
-    """
-    
+            print(np.linalg.norm(path_position[-1] - target_pose))
+
+    print(joint_rotation)
+    print(np.linalg.norm(path_position[-1] - target_pose))
     return joint_positions, joint_orientations
 
 def part2_inverse_kinematics(meta_data, joint_positions, joint_orientations, relative_x, relative_z, target_height):
