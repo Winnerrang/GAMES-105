@@ -234,6 +234,21 @@ def get_offset(meta_data):
             joint_offset.append(offset.tolist())
     return np.array(joint_offset)
 
+
+def clip_angle(rotation):
+    """
+    clip the rotation angle to [-180, 180]
+    Input:
+        rotation: rotation of each joint
+    output:
+        result: rotation of each joint after clipping
+    """
+    result = np.copy(rotation)
+    for i in range(0, np.shape(result)[0]):
+        result[i] = (R.from_euler("XYZ", result[i], degrees=True)).as_euler("XYZ", degrees=True)
+    return result
+
+
 def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, target_pose):
     """
     完成函数，计算逆运动学
@@ -267,9 +282,10 @@ def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, tar
         path_rotation_1D = np.reshape(path_rotation, (-1))
         path_rotation_1D = path_rotation_1D - sigma * gradient
         path_rotation = np.reshape(path_rotation_1D, (-1, 3))
-        path_rotation =
+        path_rotation = clip_angle(path_rotation)
         path_position, _,= FK(path_rotation, path_offset)
         iter += 1
+        break
 
     # put the chain rotation back to the rotation in the reference of root
     path_rotation, root_position = rotation_path_to_global(path_rotation, path_position, meta_data)
