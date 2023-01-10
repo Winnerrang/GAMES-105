@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-
+from Lab1_FK_answers import part2_forward_kinematics
 
 def find_distance(cur_pos, target_pose):
     return np.linalg.norm(cur_pos - target_pose)
@@ -93,11 +93,13 @@ def find_rotations(orientation, meta_data):
     output:
         joint_rotation: the local rotation of every joint
     """
+    print(np.shape(orientation))
 
     joint_rotation = []
     for i in range(0, len(meta_data.joint_name)):
         name = meta_data.joint_name[i]
         parent_idx = meta_data.joint_parent[i]
+
         joint_orientation = R.from_quat(orientation[i])
         if name == "RootJoint":
             rotation = joint_orientation.as_euler('XYZ', degrees=True)
@@ -107,7 +109,7 @@ def find_rotations(orientation, meta_data):
             parent_orientation = R.from_quat(orientation[parent_idx])
             rotation = (parent_orientation.inv() * joint_orientation).as_euler('XYZ', degrees=True)
 
-        joint_rotation.append(rotation)
+        joint_rotation.append(rotation.tolist())
 
     return np.array(joint_rotation)
 
@@ -162,6 +164,76 @@ def get_path_info(joint_orientation, joint_positions, meta_data):
     return np.array(path_rotation), np.array(path_offset), np.array(path_position)
 
 
+def rotation_path_to_global(path_rotation, path_position, meta_data):
+    """
+    Input:
+        path_rotation: numpy array nx3, rotation of a chain, joint i is the parent of joint i+1
+        path_position: numpy array nx3, global position of every joint in the chain
+        meta_data: useful data for the whole skeleton
+    Output:
+        global_rotation: numpy array nx3, rotation of the joint that is based on their actual parent in the skeleton
+        root position: numpy array 3, global position of the root of the skeleton
+    """
+
+    global_rotation = np.zeros(np.shape(path_rotation))
+
+    path, path_name, path1, path2 = meta_data.get_path_from_root_to_end()
+
+    # the root of the chain is the root of skeleton, then global rotation is the
+    # path_rotation
+    if len(path2) == 1:
+        return path_rotation, path_position[0]
+
+    print("Have not implemented when root of chain is not root of the skeleton")
+    exit(1)
+
+
+def combine_rotation(path_rotation, joint_rotation, meta_data):
+    """
+    combine the new rotation in the chain and the rotation for other joint in the skeleton
+    Input:
+        path_rotation: numpy array (nx3), the rotation of the chain and each joint rotation is relative to its actual
+        parent in the skeleton
+        joint_rotation: numpy array (nx3), old joint rotation
+        meta_data: useful data for the whole skeleton
+
+    output:
+        new_joint_rotation: numpy array (nx3), new joint rotation
+    """
+    path, path_name, _, _ = meta_data.get_path_from_root_to_end()
+
+    new_joint_rotation = np.copy(joint_rotation)
+
+    for i in range(0, len(path)):
+        if path_name[i].find("_end") != -1:
+            continue
+        assert(0 <= path[i] < np.shape(new_joint_rotation)[0])
+        new_joint_rotation[path[i]] = path_rotation[i]
+
+    return new_joint_rotation
+
+def get_offset(meta_data):
+    """
+    get the joint offset of the skeleton
+    Input:
+        meta_data: useful data structure for skeleton
+    Output:
+        joint_offset: numpy array (nx3), the offset of the joint
+    """
+    joint_offset = []
+    joint_name = meta_data.joint_name
+    joint_parent = meta_data.joint_parent
+    joint_initial_position = meta_data.joint_initial_position
+
+    for i in range(0, len(joint_name)):
+        if joint_parent[i] == -1:
+            joint_offset.append([0.0, 0.0, 0.0])
+        else:
+            parent_idx = joint_parent[i]
+            offset = joint_initial_position[i] - joint_initial_position[parent_idx]
+            joint_offset.append(offset.tolist())
+    return np.array(joint_offset)
+
 def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, target_pose):
     """
     完成函数，计算逆运动学
@@ -191,59 +263,42 @@ def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, tar
         print(iter)
         gradient = find_gradient(path_rotation, path_offset, path_position, target_pose, meta_data)
 
-        sigma = line_search(path_rotation, gradient, 10000, path_offset, target_pose)
+        sigma = line_search(path_rotation, -gradient, 10000, path_offset, target_pose)
         path_rotation_1D = np.reshape(path_rotation, (-1))
         path_rotation_1D = path_rotation_1D - sigma * gradient
         path_rotation = np.reshape(path_rotation_1D, (-1, 3))
+        path_rotation =
         path_position, _,= FK(path_rotation, path_offset)
         iter += 1
-    return joint_positions, joint_orientations
+
     # put the chain rotation back to the rotation in the reference of root
+    path_rotation, root_position = rotation_path_to_global(path_rotation, path_position, meta_data)
 
+    print("rotation path to global")
+    print(path_rotation)
+    print(root_position)
     # combine every rotation together
+    new_joint_rotations = combine_rotation(path_rotation, joint_rotation, meta_data)
 
-    # calculate the joint position and joint orientation
-
-    '''path, path_names, forward_path, backward_path = meta_data.get_path_from_root_to_end()
-
-    # current rotation for every joint
-    joint_rotation = find_rotations(joint_orientations, meta_data)
-
-    # current location and rotation in the path, rotation is in euler radian form
-    path_rotation, path_offset, path_position = get_path_info(joint_orientations, joint_positions, meta_data, path, forward_path, backward_path)
-
-    # initial stepping
-    alpha = 1
-
-    # tolerance for the difference between the target position and the result position
-    tolerance = 0.01
-    max_iteration = 20
-
-    iteration = 0
-    while iteration < max_iteration and np.linalg.norm(path_position[-1] - target_pose) > tolerance:
-        iteration += 1
-        jacobian_transpose = find_JT(path_rotation, path_position)
-        distance_vector = path_position[-1] - target_pose
-        old_distance = np.linalg.norm(distance_vector)
-
-        is_decreasing = False
-
-        while not is_decreasing:
-            path_rotation_1D = np.reshape(path_rotation, (-1))
-            path_rotation_1D = path_rotation_1D - alpha * np.matmul(jacobian_transpose, distance_vector)
-            path_rotation = np.reshape(path_rotation_1D, (-1, 3))
-
-            path_position, path_orientations = FK(path_rotation, path_offset)
-            if np.linalg.norm(path_position[-1] - target_pose) >= old_distance:
-                alpha /= 2.0
-            else:
-                is_decreasing = True
-
-            print(np.linalg.norm(path_position[-1] - target_pose))
-
+    print("new rotation")
+    path, _, _, _ = meta_data.get_path_from_root_to_end()
+    print(path)
     print(joint_rotation)
-    print(np.linalg.norm(path_position[-1] - target_pose))
-    return joint_positions, joint_orientations'''
+    print(path_rotation)
+    print(new_joint_rotations)
+    motion_data = np.concatenate((root_position, new_joint_rotations), axis=None).tolist()
+    motion_data = [motion_data]
+    motion_data = np.array(motion_data)
+    print("motion data")
+    print(motion_data)
+
+    joint_offset = get_offset(meta_data)
+    print("joint offset", joint_offset)
+    # calculate the joint position and joint orientation
+    joint_positions, joint_orientations = part2_forward_kinematics(meta_data.joint_name, meta_data.joint_parent,
+                                                                   joint_offset, motion_data, 0)
+    return joint_positions, joint_orientations
+
 
 def part2_inverse_kinematics(meta_data, joint_positions, joint_orientations, relative_x, relative_z, target_height):
     """
