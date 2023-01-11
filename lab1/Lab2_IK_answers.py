@@ -43,15 +43,15 @@ def FK(rotations, offsets):
     orientation = np.zeros(np.shape(rotations))
     positions = np.zeros((np.shape(rotations)[0], 3))
 
-    parent_orientation = R.identity()
-    parent_position = np.array([0, 0, 0])
-    for i in range(0, np.shape(rotations)[0]):
+    orientation[0] = rotations[0]
+    parent_position = np.copy(offsets[0])
+    positions[0] = np.copy(offsets[0])
+    for i in range(1, np.shape(rotations)[0]):
         rotation = R.from_euler("XYZ", rotations[i], degrees=True)
+        parent_orientation = R.from_euler("XYZ", orientation[i - 1], degrees=True)
         joint_orientation = parent_orientation * rotation
         orientation[i] = joint_orientation.as_euler('XYZ', degrees=True)
-        positions[i] = parent_position + parent_orientation.apply(offsets[i])
-
-        parent_orientation = joint_orientation
+        positions[i] = positions[i - 1] + parent_orientation.apply(offsets[i])
 
     return positions, orientation
 
@@ -64,6 +64,8 @@ def f(rotations, offsets, target_position):
     """
 
     positions, _, = FK(rotations, offsets)
+    print(offsets)
+    print(positions)
     return 0.5 * find_distance(positions[-1], target_position)
 
 
@@ -71,16 +73,17 @@ def line_search(z, dz, max_steps, offsets, target_position):
     step = max_steps
     E0 = f(z, offsets, target_position)
     z = np.reshape(z, (-1))
-
+    print(E0)
     while step > 1e-4:
         new_z = z + step * dz
         new_z = np.reshape(new_z, (-1, 3))
         E = f(new_z, offsets, target_position)
-
+        print(E)
         if E < E0:
             return step
         else:
             step /= 2.0
+    exit(0)
     return 0
 
 
@@ -93,7 +96,6 @@ def find_rotations(orientation, meta_data):
     output:
         joint_rotation: the local rotation of every joint
     """
-    print(np.shape(orientation))
 
     joint_rotation = []
     for i in range(0, len(meta_data.joint_name)):
@@ -212,6 +214,7 @@ def combine_rotation(path_rotation, joint_rotation, meta_data):
 
     return new_joint_rotation
 
+
 def get_offset(meta_data):
     """
     get the joint offset of the skeleton
@@ -274,34 +277,40 @@ def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, tar
 
     # optimization
     iter = 0
+    print(find_distance(path_position[-1], target_pose))
     while iter < MAX_ITERATION and find_distance(path_position[-1], target_pose) > TOLERANCE:
-        print(iter)
+
         gradient = find_gradient(path_rotation, path_offset, path_position, target_pose, meta_data)
 
-        sigma = line_search(path_rotation, -gradient, 10000, path_offset, target_pose)
+        sigma = line_search(path_rotation, -gradient, 1000, path_offset, target_pose)
         path_rotation_1D = np.reshape(path_rotation, (-1))
         path_rotation_1D = path_rotation_1D - sigma * gradient
         path_rotation = np.reshape(path_rotation_1D, (-1, 3))
         path_rotation = clip_angle(path_rotation)
+
+
         path_position, _,= FK(path_rotation, path_offset)
+
         iter += 1
-        break
+
 
     # put the chain rotation back to the rotation in the reference of root
     path_rotation, root_position = rotation_path_to_global(path_rotation, path_position, meta_data)
 
     print("rotation path to global")
     print(path_rotation)
+
     print(root_position)
     # combine every rotation together
     new_joint_rotations = combine_rotation(path_rotation, joint_rotation, meta_data)
-
     print("new rotation")
+
     path, _, _, _ = meta_data.get_path_from_root_to_end()
     print(path)
     print(joint_rotation)
     print(path_rotation)
     print(new_joint_rotations)
+
     motion_data = np.concatenate((root_position, new_joint_rotations), axis=None).tolist()
     motion_data = [motion_data]
     motion_data = np.array(motion_data)
