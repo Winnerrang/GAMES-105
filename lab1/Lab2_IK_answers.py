@@ -2,8 +2,10 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from Lab1_FK_answers import part2_forward_kinematics
 
+
 def find_distance(cur_pos, target_pose):
-    return np.linalg.norm(cur_pos - target_pose)
+    dist_vec = cur_pos - target_pose
+    return np.dot(dist_vec, dist_vec)
 
 
 # assume the rotation is using the rotation represented by radian euler form
@@ -33,7 +35,11 @@ def find_JT(rotations, position):
 
 def find_gradient(path_rotation, path_offset, path_position, target_pose, meta_data):
     JT = find_JT(path_rotation, path_position)
-    return np.matmul(JT, path_position[-1] - target_pose)
+    # jacobian inverse method
+    damping_parameter = 1.0 / 10000.0
+    grad = np.matmul(JT, np.linalg.inv(np.matmul(np.transpose(JT), JT) + damping_parameter * np.identity(3)))
+
+    return np.matmul(grad, path_position[-1] - target_pose)
 
 
 # Do forward kinematic to a chain of joint
@@ -56,34 +62,36 @@ def FK(rotations, offsets):
     return positions, orientation
 
 
-def f(rotations, offsets, target_position):
+def f(rotations, offsets, target_position, initial_path_rotation):
     """
     calculate the loss function
     input:
 
     """
 
+    damping_parameter = 1.0 / 10000.0
     positions, _, = FK(rotations, offsets)
-    print(offsets)
-    print(positions)
-    return 0.5 * find_distance(positions[-1], target_position)
+    rotation_diff = np.reshape(rotations, (-1)) - np.reshape(initial_path_rotation, (-1))
+    print(0.5 * find_distance(positions[-1], target_position))
+    print(0.5 * damping_parameter * np.dot(rotation_diff, rotation_diff))
+    return 0.5 * find_distance(positions[-1], target_position)\
+           + 0.5 * damping_parameter * np.dot(rotation_diff, rotation_diff)
 
 
-def line_search(z, dz, max_steps, offsets, target_position):
+def line_search(z, dz, max_steps, offsets, target_position, initial_path_rotation):
     step = max_steps
-    E0 = f(z, offsets, target_position)
+    E0 = f(z, offsets, target_position, initial_path_rotation)
     z = np.reshape(z, (-1))
-    print(E0)
     while step > 1e-4:
+
         new_z = z + step * dz
         new_z = np.reshape(new_z, (-1, 3))
-        E = f(new_z, offsets, target_position)
-        print(E)
+        clip_angle(new_z)
+        E = f(new_z, offsets, target_position, initial_path_rotation)
         if E < E0:
             return step
         else:
             step /= 2.0
-    exit(0)
     return 0
 
 
@@ -266,7 +274,7 @@ def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, tar
         joint_orientations: 计算得到的关节朝向，是一个numpy数组，shape为(M, 4)，M为关节数
     """
 
-    MAX_ITERATION = 20
+    MAX_ITERATION = 200
     TOLERANCE = 0.01
 
     # find the rotation of every joint
@@ -274,15 +282,15 @@ def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, tar
 
     # filter out the relative current rotation based on the chain
     path_rotation, path_offset, path_position = get_path_info(joint_orientations, joint_positions, meta_data)
-
+    initial_path_rotation = np.copy(path_rotation)
     # optimization
     iter = 0
     print(find_distance(path_position[-1], target_pose))
+    print(f(path_rotation, path_offset, target_pose, initial_path_rotation))
     while iter < MAX_ITERATION and find_distance(path_position[-1], target_pose) > TOLERANCE:
-
         gradient = find_gradient(path_rotation, path_offset, path_position, target_pose, meta_data)
 
-        sigma = line_search(path_rotation, -gradient, 1000, path_offset, target_pose)
+        sigma = line_search(path_rotation, -gradient, 1000, path_offset, target_pose, initial_path_rotation)
         path_rotation_1D = np.reshape(path_rotation, (-1))
         path_rotation_1D = path_rotation_1D - sigma * gradient
         path_rotation = np.reshape(path_rotation_1D, (-1, 3))
@@ -290,7 +298,7 @@ def part1_inverse_kinematics(meta_data, joint_positions, joint_orientations, tar
 
 
         path_position, _,= FK(path_rotation, path_offset)
-
+        print(find_distance(path_position[-1], target_pose))
         iter += 1
 
 
